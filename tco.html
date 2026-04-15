@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>汽车持有成本计算器 (TCO)</title>
+
+    <!-- 引入 Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['system-ui', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+
+    <!-- 引入 React 和 ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+
+    <!-- 引入 Babel 以支持浏览器内编译 JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+        /* 隐藏滚动条但保留滚动功能 */
+        .hide-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .hide-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+        body {
+            transition: background-color 0.5s ease;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useMemo, useEffect } = React;
+
+        // ================= 内置 SVG 图标组件 (替代 lucide-react) =================
+        const IconBase = ({ d, size = 24, className = "", strokeWidth = 2, children }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className}>
+                {d && <path d={d} />}
+                {children}
+            </svg>
+        );
+
+        const Plus = (props) => <IconBase d="M5 12h14 M12 5v14" {...props} />;
+        const Trash2 = (props) => <IconBase d="M3 6h18 M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6 M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2 M10 11v6 M14 11v6" {...props} />;
+        const Info = (props) => <IconBase {...props}><circle cx="12" cy="12" r="10"/><path d="M12 16v-4 M12 8h.01"/></IconBase>;
+        const BarChart3 = (props) => <IconBase d="M3 3v18h18 M18 17V9 M13 17V5 M8 17v-3" {...props} />;
+        const Settings2 = (props) => <IconBase {...props}><path d="M20 7h-9 M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/></IconBase>;
+        const Zap = (props) => <IconBase {...props}><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></IconBase>;
+        const Moon = (props) => <IconBase d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" {...props} />;
+        const Sun = (props) => <IconBase {...props}><circle cx="12" cy="12" r="4"/><path d="M12 2v2 M12 20v2 M4.93 4.93l1.41 1.41 M17.66 17.66l1.41 1.41 M2 12h2 M20 12h2 M4.93 19.07l1.41-1.41 M17.66 6.34l1.41-1.41"/></IconBase>;
+        const Fuel = (props) => <IconBase d="M3 22V4a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v18 M14 13h2a2 2 0 0 1 2 2v2a2 2 0 0 0 2 2h0a2 2 0 0 0 2-2V9.83a2 2 0 0 0-.59-1.42L18 5 M14 22h4 M4 15h8 M4 9h8" {...props} />;
+        const Droplet = (props) => <IconBase d="M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7z" {...props} />;
+
+        // ================= 核心业务逻辑 =================
+        const COLORS = {
+            depreciation: '#FF3B30',
+            energy: '#FF9500',
+            insurance: '#007AFF',
+            maintenance: '#34C759',
+            repair: '#8E8E93',
+            fixedMonthly: '#AF52DE'
+        };
+
+        const LEGEND = [
+            { key: 'depreciation', label: '折旧亏损', color: COLORS.depreciation },
+            { key: 'energy', label: '能源消耗', color: COLORS.energy },
+            { key: 'insurance', label: '保险费用', color: COLORS.insurance },
+            { key: 'maintenance', label: '常规维保', color: COLORS.maintenance },
+            { key: 'repair', label: '维修备用金', color: COLORS.repair },
+            { key: 'fixedMonthly', label: '换电月租等', color: COLORS.fixedMonthly },
+        ];
+
+        const ICON_THEMES = [
+            'bg-blue-50 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400',
+            'bg-emerald-50 dark:bg-emerald-900/40 text-emerald-600 dark:text-emerald-400',
+            'bg-orange-50 dark:bg-orange-900/40 text-orange-600 dark:text-orange-500',
+            'bg-purple-50 dark:bg-purple-900/40 text-purple-600 dark:text-purple-400',
+            'bg-rose-50 dark:bg-rose-900/40 text-rose-600 dark:text-rose-400',
+            'bg-cyan-50 dark:bg-cyan-900/40 text-cyan-600 dark:text-cyan-400'
+        ];
+
+        // ================= 可视化：响应式的宽度侦测 Hook =================
+        function useContainerWidth() {
+            const ref = React.useRef(null);
+            const [width, setWidth] = useState(0);
+            useEffect(() => {
+                if (!ref.current) return;
+                const update = () => {
+                    if (ref.current) setWidth(ref.current.offsetWidth);
+                };
+                update();
+                const ro = new ResizeObserver(update);
+                ro.observe(ref.current);
+                window.addEventListener('resize', update);
+                return () => {
+                    ro.disconnect();
+                    window.removeEventListener('resize', update);
+                };
+            }, []);
+            return [ref, width];
+        }
+
+        function App() {
+            const [isDark, setIsDark] = useState(false);
+            const [isMounted, setIsMounted] = useState(false);
+
+            useEffect(() => {
+                const timer = setTimeout(() => setIsMounted(true), 150);
+                return () => clearTimeout(timer);
+            }, []);
+
+            const [globalParams, setGlobalParams] = useState({
+                years: 3,
+                annualMileage: 11440,
+                gasPrice: 8.5,
+                elecPrice: 1.0,
+            });
+
+            const [cars, setCars] = useState([
+                {
+                    id: '1',
+                    name: '2018 高可靠代步油车',
+                    type: 'gas',
+                    initialCost: 60000,
+                    residualValue: 35000,
+                    energyConsumption: 8.0,
+                    phevGasConsumption: 5.0,
+                    evRatio: 50,
+                    firstYearInsurance: 4000,
+                    maintenancePerYear: 1600,
+                    repairFundPerYear: 1000,
+                    fixedMonthlyCost: 0,
+                },
+                {
+                    id: '2',
+                    name: '新款租电版纯电车',
+                    type: 'ev',
+                    initialCost: 100000,
+                    residualValue: 55250,
+                    energyConsumption: 14.0,
+                    phevGasConsumption: 5.0,
+                    evRatio: 50,
+                    firstYearInsurance: 6000,
+                    maintenancePerYear: 2500,
+                    repairFundPerYear: 0,
+                    fixedMonthlyCost: 400,
+                }
+            ]);
+
+            const handleGlobalChange = (field, value) => {
+                setGlobalParams(prev => ({ ...prev, [field]: parseFloat(value) || 0 }));
+            };
+
+            const handleCarChange = (id, field, value) => {
+                setCars(prev => prev.map(car =>
+                    car.id === id ? { ...car, [field]: value } : car
+                ));
+            };
+
+            const handleAddCar = () => {
+                const newCar = {
+                    id: Date.now().toString(),
+                    name: `新增对比方案 ${cars.length + 1}`,
+                    type: 'phev',
+                    initialCost: 120000,
+                    residualValue: 60000,
+                    energyConsumption: 13.0,
+                    phevGasConsumption: 4.5,
+                    evRatio: 70,
+                    firstYearInsurance: 5000,
+                    maintenancePerYear: 2000,
+                    repairFundPerYear: 0,
+                    fixedMonthlyCost: 0,
+                };
+                setCars([...cars, newCar]);
+            };
+
+            const calculatedData = useMemo(() => {
+                const { years, annualMileage, gasPrice, elecPrice } = globalParams;
+                const totalMileage = years * annualMileage;
+
+                return cars.map(car => {
+                    const depreciation = Math.max(0, car.initialCost - car.residualValue);
+
+                    let energyCost = 0;
+                    if (car.type === 'gas') {
+                        energyCost = (car.energyConsumption / 100) * gasPrice * totalMileage;
+                    } else if (car.type === 'ev') {
+                        energyCost = (car.energyConsumption / 100) * elecPrice * totalMileage;
+                    } else if (car.type === 'phev') {
+                        const evMileage = totalMileage * (car.evRatio / 100);
+                        const gasMileage = totalMileage * (1 - car.evRatio / 100);
+                        energyCost = ((car.energyConsumption / 100) * elecPrice * evMileage) +
+                                    ((car.phevGasConsumption / 100) * gasPrice * gasMileage);
+                    }
+
+                    let insuranceCost = 0;
+                    const insuranceRates = [1, 0.85, 0.70, 0.60, 0.50];
+                    for (let i = 0; i < years; i++) {
+                        const rate = i < insuranceRates.length ? insuranceRates[i] : 0.50;
+                        insuranceCost += car.firstYearInsurance * rate;
+                    }
+
+                    const maintenance = car.maintenancePerYear * years;
+                    const repair = car.repairFundPerYear * years;
+                    const fixedMonthly = car.fixedMonthlyCost * 12 * years;
+
+                    const totalTco = depreciation + energyCost + insuranceCost + maintenance + repair + fixedMonthly;
+
+                    return {
+                        ...car,
+                        breakdown: { depreciation, energy: energyCost, insurance: insuranceCost, maintenance, repair, fixedMonthly },
+                        totalTco
+                    };
+                });
+            }, [globalParams, cars]);
+
+            const maxTco = useMemo(() => {
+                if (calculatedData.length === 0) return 100000;
+                const max = Math.max(...calculatedData.map(c => c.totalTco));
+                return max > 0 ? max : 100000;
+            }, [calculatedData]);
+
+            useEffect(() => {
+                document.body.style.backgroundColor = isDark ? '#09090b' : '#f4f4f5';
+                if (isDark) {
+                    document.documentElement.classList.add('dark');
+                } else {
+                    document.documentElement.classList.remove('dark');
+                }
+            }, [isDark]);
+
+            // 侦测图表容器宽度，用于判断是"宽屏：标签左右延伸"还是"窄屏：标签堆叠在柱顶"
+            const [chartRef, chartWidth] = useContainerWidth();
+            // 每辆车可分到的横向空间（至少能放下一段左右延伸的标签才算宽屏）
+            const perCarWidth = calculatedData.length > 0 ? chartWidth / calculatedData.length : 0;
+            const isWideLayout = perCarWidth >= 260; // 小于该阈值时折叠到柱顶
+
+            const springAnim = "transition-all duration-[600ms] ease-[cubic-bezier(0.32,0.72,0,1)]";
+
+            return (
+                <div className="min-h-screen text-zinc-900 dark:text-zinc-100 p-4 md:p-8 flex flex-col transition-colors duration-500">
+                    <div className="flex flex-col lg:flex-row gap-6 md:gap-8 flex-1 w-full max-w-[1800px] mx-auto">
+
+                        {/* 左侧区域：
+                            - 全场景：高度由内容决定，不再绑死视口高度（避免短窗口下被挤扁）
+                            - 桌面 (lg+)：保留 sticky 让图表在滚动时贴顶跟随
+                        */}
+                        <div className="w-full lg:w-5/12 flex flex-col gap-6 md:gap-8 lg:sticky lg:top-8 z-10">
+
+                            <div className={`bg-white/80 dark:bg-zinc-900/80 backdrop-blur-2xl p-5 md:p-8 rounded-[28px] shadow-[0_8px_30px_rgb(0,0,0,0.04)] dark:shadow-none dark:border dark:border-white/5 shrink-0 ${springAnim}`}>
+                                <div className="flex items-center justify-between mb-6">
+                                    <div className="flex items-center gap-3">
+                                        <div className="p-2.5 bg-blue-500/10 dark:bg-blue-500/20 rounded-xl">
+                                            <Settings2 size={22} className="text-blue-600 dark:text-blue-400" />
+                                        </div>
+                                        <h2 className="text-xl md:text-2xl font-bold tracking-tight">全局用车模型</h2>
+                                    </div>
+                                    <button
+                                        onClick={() => setIsDark(!isDark)}
+                                        className={`p-2.5 rounded-full bg-zinc-100/80 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 hover:scale-105 active:scale-95 ${springAnim}`}
+                                        title="外观模式"
+                                    >
+                                        {isDark ? <Sun size={20} /> : <Moon size={20} />}
+                                    </button>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-x-6 gap-y-6">
+                                    {[
+                                        { label: '持有年限 (年)', key: 'years', min: 1, max: 20, step: 1 },
+                                        { label: '年行驶里程 (km)', key: 'annualMileage', min: 1000, max: 100000, step: 1000 },
+                                        { label: '当前油价 (元/L)', key: 'gasPrice', min: 4.0, max: 15.0, step: 0.1 },
+                                        { label: '电均价 (元/度)', key: 'elecPrice', min: 0.1, max: 3.0, step: 0.1 }
+                                    ].map(param => (
+                                        <div key={param.key} className="space-y-2.5 group">
+                                            <div className="flex justify-between items-center">
+                                                <label className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 tracking-wide">{param.label}</label>
+                                                <input
+                                                    type="number" min={param.min} max={param.max} step={param.step}
+                                                    className={`w-18 px-2 py-1 text-sm bg-zinc-100 dark:bg-zinc-800 border border-transparent focus:bg-white focus:border-blue-500/50 dark:focus:bg-zinc-950 rounded-lg outline-none text-right font-medium ${springAnim}`}
+                                                    value={globalParams[param.key]}
+                                                    onChange={(e) => handleGlobalChange(param.key, e.target.value)}
+                                                />
+                                            </div>
+                                            <input
+                                                type="range" min={param.min} max={param.max} step={param.step}
+                                                className="w-full accent-blue-500 h-1.5 bg-zinc-200 dark:bg-zinc-800 rounded-full appearance-none cursor-grab active:cursor-grabbing transition-opacity opacity-80 group-hover:opacity-100"
+                                                value={globalParams[param.key]}
+                                                onChange={(e) => handleGlobalChange(param.key, e.target.value)}
+                                            />
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {/* TCO 视图卡片：
+                                不再给卡片加 minHeight。高度直接下放到下方图表容器，避免 flex 链路上的
+                                百分比高度解析问题。卡片本身由内容（标题 + 图表 + 图例）自然撑开。
+                            */}
+                            <div
+                                className={`bg-white/80 dark:bg-zinc-900/80 backdrop-blur-2xl p-5 md:p-8 rounded-[28px] shadow-[0_8px_30px_rgb(0,0,0,0.04)] dark:shadow-none dark:border dark:border-white/5 flex flex-col ${springAnim}`}
+                            >
+                                <div className="flex items-center gap-3 mb-4 md:mb-8 shrink-0">
+                                    <div className="p-2.5 bg-indigo-500/10 dark:bg-indigo-500/20 rounded-xl">
+                                        <BarChart3 size={22} className="text-indigo-600 dark:text-indigo-400" />
+                                    </div>
+                                    <h2 className="text-xl md:text-2xl font-bold tracking-tight">TCO 总成本视图</h2>
+                                </div>
+
+                                {/* ============ 响应式图表容器 ============ */}
+                                {/* 核心修复：
+                                    1. 容器自身拥有显式 CSS height（clamp），高度不再依赖 flex 链路向下传递
+                                       · 地板 440px：短窗口 / 手机上保底图表净高 ~360px，柱条舒展可读
+                                       · 目标 calc(100vh - 26rem)：扣掉全局参数卡 + 标题 + 图例 + 页边距后吃掉剩余视口
+                                       · 天花板 900px：大屏 / 超宽屏避免柱条被拉得过长、比例失真
+                                    2. 有了显式 height，内部 h-full / 百分比高度才能正确递归解析
+                                    3. 宽屏 justify-around 让柱子均匀铺满；窄屏 perCarWidth < 260 时标签折叠到柱顶
+                                */}
+                                <div
+                                    ref={chartRef}
+                                    className="w-full relative"
+                                    style={{ height: 'clamp(440px, calc(100vh - 26rem), 900px)' }}
+                                >
+                                    <div className="w-full h-full flex items-end justify-around pb-4 md:pb-8 pt-12 gap-2">
+                                        {calculatedData.map((car, carIndex) => {
+                                            const segments = ['fixedMonthly', 'repair', 'maintenance', 'insurance', 'energy', 'depreciation']
+                                                .map((key) => ({ key, value: car.breakdown[key] }))
+                                                .filter(item => item.value > 0);
+
+                                            // 宽屏时：偶数辆车左右交替；奇数辆车最后一个向右
+                                            // 窄屏时：全部堆叠在顶部，不再显示侧边标签
+                                            const isLabelLeft = calculatedData.length > 1
+                                                ? carIndex < Math.ceil(calculatedData.length / 2)
+                                                : true;
+
+                                            return (
+                                                <div
+                                                    key={car.id}
+                                                    className="flex-1 min-w-0 flex flex-col justify-end items-center group relative h-full"
+                                                >
+                                                    {/* 顶部总价气泡 */}
+                                                    <div className={`absolute top-0 opacity-0 group-hover:opacity-100 bg-zinc-900/90 dark:bg-white/90 backdrop-blur-md text-white dark:text-zinc-900 text-sm font-semibold py-1.5 px-3 rounded-xl whitespace-nowrap z-40 pointer-events-none shadow-xl transform group-hover:-translate-y-1 ${springAnim}`}>
+                                                        ¥{car.totalTco.toLocaleString(undefined, {maximumFractionDigits:0})}
+                                                    </div>
+
+                                                    {/* 柱子主体：宽度随容器自适应（上下限 clamp），高度用 flex-1 + min-h-0 正确填满列高 */}
+                                                    <div
+                                                        className="flex-1 min-h-0 w-full flex flex-col justify-end relative rounded-t-lg overflow-visible mt-6"
+                                                        style={{
+                                                            maxWidth: 'clamp(28px, 45%, 88px)'
+                                                        }}
+                                                    >
+                                                        {segments.map((item) => {
+                                                            const percentage = (item.value / maxTco) * 100;
+                                                            return (
+                                                                <div
+                                                                    key={item.key}
+                                                                    style={{
+                                                                        height: isMounted ? `${percentage}%` : '0%',
+                                                                        backgroundColor: COLORS[item.key],
+                                                                        minHeight: isMounted && percentage > 0 && percentage <= 1.5 ? '3px' : 'auto'
+                                                                    }}
+                                                                    className={`w-full relative group/segment cursor-crosshair border-t border-white/30 dark:border-zinc-950/30 first:rounded-t-md last:rounded-b-sm hover:brightness-110 hover:shadow-[0_0_15px_rgba(255,255,255,0.3)] z-10 hover:z-20 ${springAnim}`}
+                                                                >
+                                                                    {isWideLayout ? (
+                                                                        isLabelLeft ? (
+                                                                            <div className={`absolute top-1/2 -translate-y-1/2 right-full pr-1.5 flex items-center justify-end pointer-events-none z-30 opacity-60 group-hover/segment:opacity-100 ${springAnim}`}>
+                                                                                <div className="text-[11px] md:text-xs text-zinc-700 dark:text-zinc-200 whitespace-nowrap bg-white/80 dark:bg-zinc-800/80 backdrop-blur-xl shadow-sm border border-zinc-200/50 dark:border-zinc-700/50 px-2.5 py-1 rounded-lg font-medium tracking-tight mr-1.5">
+                                                                                    {LEGEND.find(l => l.key === item.key).label}: ¥{item.value.toLocaleString(undefined, {maximumFractionDigits:0})}
+                                                                                </div>
+                                                                                <div className="h-[1.5px] bg-zinc-300 dark:bg-zinc-700 w-6 md:w-10 rounded-full" />
+                                                                            </div>
+                                                                        ) : (
+                                                                            <div className={`absolute top-1/2 -translate-y-1/2 left-full pl-1.5 flex items-center justify-start pointer-events-none z-30 opacity-60 group-hover/segment:opacity-100 ${springAnim}`}>
+                                                                                <div className="h-[1.5px] bg-zinc-300 dark:bg-zinc-700 w-6 md:w-10 rounded-full" />
+                                                                                <div className="text-[11px] md:text-xs text-zinc-700 dark:text-zinc-200 whitespace-nowrap bg-white/80 dark:bg-zinc-800/80 backdrop-blur-xl shadow-sm border border-zinc-200/50 dark:border-zinc-700/50 px-2.5 py-1 rounded-lg font-medium tracking-tight ml-1.5">
+                                                                                    {LEGEND.find(l => l.key === item.key).label}: ¥{item.value.toLocaleString(undefined, {maximumFractionDigits:0})}
+                                                                                </div>
+                                                                            </div>
+                                                                        )
+                                                                    ) : (
+                                                                        // 窄屏：hover 后在柱子右上角浮出标签，不占据布局空间
+                                                                        <div className={`absolute left-1/2 -translate-x-1/2 -top-7 opacity-0 group-hover/segment:opacity-100 pointer-events-none z-30 ${springAnim}`}>
+                                                                            <div className="text-[10px] text-zinc-700 dark:text-zinc-200 whitespace-nowrap bg-white/90 dark:bg-zinc-800/90 backdrop-blur-xl shadow-md border border-zinc-200/50 dark:border-zinc-700/50 px-2 py-0.5 rounded-md font-medium">
+                                                                                {LEGEND.find(l => l.key === item.key).label}: ¥{item.value.toLocaleString(undefined, {maximumFractionDigits:0})}
+                                                                            </div>
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+
+                                                    {/* 底部车名 + 总价 */}
+                                                    <div className="mt-4 md:mt-6 text-center w-full max-w-[200px] flex flex-col items-center shrink-0 px-1">
+                                                        <div className="text-[13px] md:text-sm font-bold text-zinc-800 dark:text-zinc-100 break-words whitespace-normal leading-tight" title={car.name}>
+                                                            {car.name}
+                                                        </div>
+                                                        <div className="text-[11px] md:text-xs font-mono font-medium text-zinc-500 dark:text-zinc-400 mt-1.5 bg-zinc-100 dark:bg-zinc-800/50 px-2.5 py-0.5 rounded-full">
+                                                            ¥{car.totalTco.toLocaleString(undefined, {maximumFractionDigits:0})}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+
+                                        {calculatedData.length === 0 && (
+                                            <div className="text-zinc-400 dark:text-zinc-600 text-sm h-full flex items-center justify-center w-full absolute inset-0 font-medium">
+                                                请在右侧控制台添加车辆配置
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+
+                                <div className="flex flex-wrap gap-x-5 gap-y-3 mt-4 text-[11px] font-medium text-zinc-600 dark:text-zinc-400 justify-center shrink-0 border-t border-zinc-100 dark:border-zinc-800/50 pt-4 md:pt-6">
+                                    {LEGEND.map(item => (
+                                        <div key={item.key} className="flex items-center gap-2">
+                                            <div className="w-3 h-3 rounded-full shadow-inner" style={{ backgroundColor: item.color }} />
+                                            <span className="tracking-wide">{item.label}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* 右侧区域 */}
+                        <div className="w-full lg:w-7/12 flex flex-col gap-5 overflow-y-auto pb-10">
+
+                            <div className={`bg-white/80 dark:bg-zinc-900/80 backdrop-blur-2xl p-4 md:p-5 rounded-[24px] shadow-[0_4px_20px_rgb(0,0,0,0.03)] dark:shadow-none dark:border dark:border-white/5 flex items-center justify-between lg:sticky lg:top-0 z-20 ${springAnim}`}>
+                                <div>
+                                    <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 tracking-tight">车辆参数配置池</h3>
+                                    <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-1 font-medium">当前共对比 {cars.length} 款车型</p>
+                                </div>
+                                <button
+                                    onClick={handleAddCar}
+                                    className={`px-5 py-2.5 bg-blue-600 dark:bg-blue-500 text-white font-semibold rounded-full hover:bg-blue-700 dark:hover:bg-blue-400 hover:shadow-lg hover:shadow-blue-500/20 active:scale-95 flex items-center gap-2 ${springAnim}`}
+                                >
+                                    <Plus size={18} strokeWidth={2.5} />
+                                    <span className="hidden sm:inline">新增对比方案</span>
+                                </button>
+                            </div>
+
+                            {cars.map((car, index) => (
+                                <div key={car.id} className={`bg-white dark:bg-zinc-900 p-6 md:p-7 rounded-[28px] shadow-[0_8px_30px_rgb(0,0,0,0.02)] hover:shadow-[0_15px_40px_rgb(0,0,0,0.06)] dark:shadow-none dark:border dark:border-white/5 relative group ${springAnim}`}>
+
+                                    <div className="flex items-center justify-between mb-6 border-b border-zinc-100 dark:border-zinc-800/80 pb-5">
+                                        <div className="flex items-center gap-4 flex-1 pr-4">
+                                            <div className={`p-3 rounded-2xl shrink-0 ${springAnim} ${ICON_THEMES[index % ICON_THEMES.length]}`}>
+                                                {car.type === 'phev' ? (
+                                                    <div className="flex items-center space-x-1">
+                                                        <Droplet size={18} />
+                                                        <Zap size={18} />
+                                                    </div>
+                                                ) : car.type === 'ev' ? (
+                                                    <Zap size={24} />
+                                                ) : (
+                                                    <Fuel size={24} />
+                                                )}
+                                            </div>
+                                            <input
+                                                type="text"
+                                                value={car.name}
+                                                onChange={(e) => handleCarChange(car.id, 'name', e.target.value)}
+                                                className={`font-bold text-xl md:text-2xl text-zinc-900 dark:text-zinc-100 bg-transparent border-b-2 border-transparent hover:border-zinc-200 dark:hover:border-zinc-700 focus:border-blue-500 outline-none w-full max-w-[280px] tracking-tight ${springAnim}`}
+                                                placeholder="输入方案名称..."
+                                            />
+                                        </div>
+
+                                        <div className="flex items-center gap-3 shrink-0">
+                                            <select
+                                                value={car.type}
+                                                onChange={(e) => handleCarChange(car.id, 'type', e.target.value)}
+                                                className={`text-sm font-medium bg-zinc-100 dark:bg-zinc-800 text-zinc-800 dark:text-zinc-200 px-4 py-2 rounded-xl outline-none cursor-pointer border border-transparent hover:border-zinc-300 dark:hover:border-zinc-600 appearance-none ${springAnim}`}
+                                            >
+                                                <option value="gas">纯燃油车</option>
+                                                <option value="phev">插混/增程</option>
+                                                <option value="ev">纯电动车</option>
+                                            </select>
+                                            <button
+                                                onClick={() => setCars(cars.filter(c => c.id !== car.id))}
+                                                className={`p-2.5 text-zinc-400 dark:text-zinc-500 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-xl ${springAnim}`}
+                                                title="移除方案"
+                                            >
+                                                <Trash2 size={20} />
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-5">
+                                        <div className="col-span-full sm:col-span-2 lg:col-span-3 pb-2">
+                                            <h4 className="text-[11px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-widest mb-4">资产投入与折旧</h4>
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                                                <div className="group">
+                                                    <label className="block text-xs font-semibold text-zinc-500 dark:text-zinc-400 mb-2">初始买入总额 (元)</label>
+                                                    <div className="relative">
+                                                        <span className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-400 font-medium text-sm">¥</span>
+                                                        <input
+                                                            type="number" step="1000"
+                                                            value={car.initialCost}
+                                                            onChange={(e) => handleCarChange(car.id, 'initialCost', Number(e.target.value))}
+                                                            className={`w-full pl-8 pr-4 py-3 bg-zinc-50 dark:bg-zinc-800/50 border border-transparent group-hover:border-zinc-200 dark:group-hover:border-zinc-700 focus:bg-white dark:focus:bg-zinc-900 focus:ring-2 focus:ring-blue-500 text-zinc-900 dark:text-zinc-100 rounded-xl outline-none font-medium ${springAnim}`}
+                                                        />
+                                                    </div>
+                                                </div>
+                                                <div className="group">
+                                                    <label className="block text-xs font-semibold text-zinc-500 dark:text-zinc-400 mb-2">期末卖出残值 (元)</label>
+                                                    <div className="relative">
+                                                        <span className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-400 font-medium text-sm">¥</span>
+                                                        <input
+                                                            type="number" step="1000"
+                                                            value={car.residualValue}
+                                                            onChange={(e) => handleCarChange(car.id, 'residualValue', Number(e.target.value))}
+                                                            className={`w-full pl-8 pr-4 py-3 bg-zinc-50 dark:bg-zinc-800/50 border border-transparent group-hover:border-zinc-200 dark:group-hover:border-zinc-700 focus:bg-white dark:focus:bg-zinc-900 focus:ring-2 focus:ring-blue-500 text-zinc-900 dark:text-zinc-100 rounded-xl outline-none font-medium ${springAnim}`}
+                                                        />
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div className="col-span-full border-t border-zinc-100 dark:border-zinc-800/50 my-1"></div>
+
+                                        <div className="col-span-full lg:col-span-2 space-y-4">
+                                            <h4 className="text-[11px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-widest mb-4">日常运营开销</h4>
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                                                {car.type === 'phev' ? (
+                                                    <>
+                                                        <div className="group">
+                                                            <label className="block text-xs font-semibold text-zinc-500 dark:text-zinc-400 mb-2">电耗 (kWh/100km)</label>
+                                                            <input
+                                                                type="number" step="0.1"
+                                                                value={car.energyConsumption}
+                                                                onChange={(e) => handleCarChange(car.id, 'energyConsumption', Number(e.target.value))}
+                                                                className={`w-full px-4 py-3 bg-zinc-50 dark:bg-zinc-800/50 border border-transparent group-hover:border-zinc-200 dark:group-hover:border-zinc-700 focus:bg-white dark:focus:bg-zinc-900 focus:ring-2 focus:ring-blue-500 text-zinc-900 dark:text-zinc-100 rounded-xl outline-none font-medium ${springAnim}`}
+                                                            />
+                                                        </div>
+                                                        <div className="group">
+                                                            <label className="block text-xs font-semibold text-zinc-500 dark:text-zinc-400 mb-2">亏电油耗 (L/100km)</label>
+                                                            <input
+                                                                type="number" step="0.1"
+                                                                value={car.phevGasConsumption}
+                                                                onChange={(e) => handleCarChange(car.id, 'phevGasConsumption', Number(e.target.value))}
+                                                                className={`w-full px-4 py-3 bg-zinc-50 dark:bg-zinc-800/50 border border-transparent group-hover:border-zinc-200 dark:group-hover:border-zinc-700 focus:bg-white dark:focus:bg-zinc-900 focus:ring-2 focus:ring-blue-500 text-zinc-900 dark:text-zinc-100 rounded-xl outline-none font-medium ${springAnim}`}
+                                                            />
+                                                        </div>
+                                                        <div className="col-span-full sm:col-span-2 bg-blue-50 dark:bg-blue-500/5 p-4 rounded-2xl border border-blue-100 dark:border-blue-500/10">
+                                                            <div className="flex justify-between items-center mb-3">
+                                                                <label className="block text-xs font-semibold text-blue-800 dark:text-blue-300">纯电代步比例设置</label>
+                                                                <span className="text-sm font-bold text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-900/30 px-2 py-0.5 rounded-md">{car.evRatio}% 用电</span>
+                                                            </div>
+                                                            <input
+                                                                type="range" min="0" max="100" step="1"
+                                                                value={car.evRatio}
+                                                                onChange={(e) => handleCarChange(car.id, 'evRatio', Number(e.target.value))}
+                                                                className="w-full accent-blue-500 h-2 bg-blue-200/50 dark:bg-blue-900/30 rounded-full appearance-none cursor-grab active:cursor-grabbing"
+                                                            />
+                                                        </div>
+                                                    </>
+                                                ) : (
+                                                    <div className="group">
+                                                        <label className="block text-xs font-semibold text-zinc-500 dark:text-zinc-400 mb-2">百公里能耗 ({car.type === 'gas' ? 'L' : 'kWh'})</label>
+                                                        <input
+                                                            type="number" step="0.1"
+                                                            value={car.energyConsumption}
+                                                            onChange={(e) => handleCarChange(car.id, 'energyConsumption', Number(e.target.value))}
+                                                            className={`w-full px-4 py-3 bg-zinc-50 dark:bg-zinc-800/50 border border-transparent group-hover:border-zinc-200 dark:group-hover:border-zinc-700 focus:bg-white dark:focus:bg-zinc-900 focus:ring-2 focus:ring-blue-500 text-zinc-900 dark:text-zinc-100 rounded-xl outline-none font-medium ${springAnim}`}
+                                                        />
+                                                    </div>
+                                                )}
+                                                <div className="group">
+                                                    <label className="block text-xs font-semibold text-zinc-500 dark:text-zinc-400 mb-2">首年商业/交强险 (元)</label>
+                                                    <input
+                                                        type="number" step="100"
+                                                        value={car.firstYearInsurance}
+                                                        onChange={(e) => handleCarChange(car.id, 'firstYearInsurance', Number(e.target.value))}
+                                                        className={`w-full px-4 py-3 bg-zinc-50 dark:bg-zinc-800/50 border border-transparent group-hover:border-zinc-200 dark:group-hover:border-zinc-700 focus:bg-white dark:focus:bg-zinc-900 focus:ring-2 focus:ring-blue-500 text-zinc-900 dark:text-zinc-100 rounded-xl outline-none font-medium ${springAnim}`}
+                                                    />
+                                                </div>
+                                                <div className="group">
+                                                    <label className="block text-xs font-semibold text-zinc-500 dark:text-zinc-400 mb-2">年均常规保养费 (元/年)</label>
+                                                    <input
+                                                        type="number" step="100"
+                                                        value={car.maintenancePerYear}
+                                                        onChange={(e) => handleCarChange(car.id, 'maintenancePerYear', Number(e.target.value))}
+                                                        className={`w-full px-4 py-3 bg-zinc-50 dark:bg-zinc-800/50 border border-transparent group-hover:border-zinc-200 dark:group-hover:border-zinc-700 focus:bg-white dark:focus:bg-zinc-900 focus:ring-2 focus:ring-blue-500 text-zinc-900 dark:text-zinc-100 rounded-xl outline-none font-medium ${springAnim}`}
+                                                    />
+                                                </div>
+                                                <div className="group">
+                                                    <label className="block text-xs font-semibold text-zinc-500 dark:text-zinc-400 mb-2">换电/电池月租 (元/月)</label>
+                                                    <input
+                                                        type="number" step="50"
+                                                        value={car.fixedMonthlyCost}
+                                                        onChange={(e) => handleCarChange(car.id, 'fixedMonthlyCost', Number(e.target.value))}
+                                                        className={`w-full px-4 py-3 bg-zinc-50 dark:bg-zinc-800/50 border border-transparent group-hover:border-zinc-200 dark:group-hover:border-zinc-700 focus:bg-white dark:focus:bg-zinc-900 focus:ring-2 focus:ring-blue-500 text-zinc-900 dark:text-zinc-100 rounded-xl outline-none font-medium ${springAnim}`}
+                                                    />
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div className="col-span-full sm:col-span-1 lg:border-l lg:border-zinc-100 dark:lg:border-zinc-800/50 lg:pl-6 space-y-4">
+                                            <h4 className="text-[11px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-widest mb-4">老化维系金</h4>
+                                            <div className="group">
+                                                <label className="block text-xs font-semibold text-zinc-500 dark:text-zinc-400 mb-2 flex items-center gap-1.5">
+                                                    年度备用金 (元)
+                                                    <span title="对冲二手老车老化故障风险，新车建议填0" className="cursor-help text-zinc-400 hover:text-blue-500"><Info size={14} strokeWidth={2.5}/></span>
+                                                </label>
+                                                <input
+                                                    type="number" step="500"
+                                                    value={car.repairFundPerYear}
+                                                    onChange={(e) => handleCarChange(car.id, 'repairFundPerYear', Number(e.target.value))}
+                                                    className={`w-full px-4 py-3 bg-zinc-50 dark:bg-zinc-800/50 border border-transparent group-hover:border-zinc-200 dark:group-hover:border-zinc-700 focus:bg-white dark:focus:bg-zinc-900 focus:ring-2 focus:ring-blue-500 text-zinc-900 dark:text-zinc-100 rounded-xl outline-none font-medium ${springAnim}`}
+                                                />
+                                                <div className="mt-3 p-3 bg-zinc-50/80 dark:bg-zinc-800/30 rounded-xl text-[11px] text-zinc-500 dark:text-zinc-400 font-medium leading-relaxed">
+                                                    推荐设置：<br/>
+                                                    • 高龄老车：3000-5000<br/>
+                                                    • 优质二手：1000-2000<br/>
+                                                    • 在保新车：0
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
