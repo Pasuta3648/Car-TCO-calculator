@@ -134,10 +134,11 @@
             const [cars, setCars] = useState([
                 {
                     id: '1',
-                    name: '2018 高可靠代步油车',
+                    name: '车型1',
                     type: 'gas',
                     initialCost: 60000,
                     residualValue: 35000,
+                    currentAge: 7,
                     energyConsumption: 8.0,
                     phevGasConsumption: 5.0,
                     evRatio: 50,
@@ -148,10 +149,11 @@
                 },
                 {
                     id: '2',
-                    name: '新款租电版纯电车',
+                    name: '车型2',
                     type: 'ev',
                     initialCost: 100000,
                     residualValue: 55250,
+                    currentAge: 0,
                     energyConsumption: 14.0,
                     phevGasConsumption: 5.0,
                     evRatio: 50,
@@ -179,6 +181,7 @@
                     type: 'phev',
                     initialCost: 120000,
                     residualValue: 60000,
+                    currentAge: 0,
                     energyConsumption: 13.0,
                     phevGasConsumption: 4.5,
                     evRatio: 70,
@@ -190,12 +193,49 @@
                 setCars([...cars, newCar]);
             };
 
+            // 汽车价格真实下跌曲线：年份 → 相对初始买入价的残值保有率
+            // 行业经验：第1年陡降 ~20%，2~3年每年再降约 10%，之后逐年收敛趋缓
+            // 用户输入"预估3年卖出残值"作为该车保值度的锚点，其它年份按曲线等比映射
+            const RETENTION_CURVE = {
+                0: 1.00, 1: 0.80, 2: 0.70, 3: 0.60, 4: 0.52, 5: 0.45,
+                6: 0.39, 7: 0.34, 8: 0.30, 9: 0.27, 10: 0.24,
+                12: 0.20, 15: 0.15, 20: 0.10
+            };
+            const retentionAt = (year) => {
+                if (year <= 0) return 1;
+                if (RETENTION_CURVE[year] !== undefined) return RETENTION_CURVE[year];
+                const keys = Object.keys(RETENTION_CURVE).map(Number).sort((a, b) => a - b);
+                if (year >= keys[keys.length - 1]) return RETENTION_CURVE[keys[keys.length - 1]];
+                let lo = keys[0], hi = keys[1];
+                for (let i = 0; i < keys.length - 1; i++) {
+                    if (keys[i] <= year && year <= keys[i + 1]) { lo = keys[i]; hi = keys[i + 1]; break; }
+                }
+                const t = (year - lo) / (hi - lo);
+                return RETENTION_CURVE[lo] + (RETENTION_CURVE[hi] - RETENTION_CURVE[lo]) * t;
+            };
+
             const calculatedData = useMemo(() => {
                 const { years, annualMileage, gasPrice, elecPrice } = globalParams;
                 const totalMileage = years * annualMileage;
 
                 return cars.map(car => {
-                    const depreciation = Math.max(0, car.initialCost - car.residualValue);
+                    // 用户输入的 residualValue 代表"再持有 3 年后卖出的残值"
+                    // 车辆当前年限 currentAge 决定了曲线的起点：已经 N 岁的车再持有 X 年时
+                    // 应落在曲线 (N+X) 点上，贬值速度会比新车从头开始更平缓
+                    const age = Math.max(0, Number(car.currentAge) || 0);
+                    const retStart = retentionAt(age);
+                    const lossRatio = (yrs) => {
+                        const retEnd = retentionAt(age + yrs);
+                        return retStart > 0 ? (retStart - retEnd) / retStart : 0;
+                    };
+                    const loss3 = lossRatio(3);
+                    const lossN = lossRatio(years);
+                    const scale = loss3 > 0 ? lossN / loss3 : 0;
+                    const projectedResidual = Math.max(
+                        0,
+                        car.initialCost - (car.initialCost - car.residualValue) * scale
+                    );
+                    const depreciation = Math.max(0, car.initialCost - projectedResidual);
 
                     let energyCost = 0;
                     if (car.type === 'gas') {
@@ -504,7 +544,19 @@
                                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-5">
                                         <div className="col-span-full sm:col-span-2 lg:col-span-3 pb-2">
                                             <h4 className="text-[11px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-widest mb-4">资产投入与折旧</h4>
-                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+                                                <div className="group">
+                                                    <label className="block text-xs font-semibold text-zinc-500 dark:text-zinc-400 mb-2 flex items-center gap-1.5">
+                                                        车辆当前年限 (年)
+                                                        <span title="购入时车辆已经使用的年数。新车填 0；二手车按车龄填写。该值决定贬值曲线的起点——老车再持有相同年限时贬值会更平缓。" className="cursor-help text-zinc-400 hover:text-blue-500"><Info size={14} strokeWidth={2.5}/></span>
+                                                    </label>
+                                                    <input
+                                                        type="number" step="1" min="0" max="25"
+                                                        value={car.currentAge ?? 0}
+                                                        onChange={(e) => handleCarChange(car.id, 'currentAge', Number(e.target.value))}
+                                                        className={`w-full px-4 py-3 bg-zinc-50 dark:bg-zinc-800/50 border border-transparent group-hover:border-zinc-200 dark:group-hover:border-zinc-700 focus:bg-white dark:focus:bg-zinc-900 focus:ring-2 focus:ring-blue-500 text-zinc-900 dark:text-zinc-100 rounded-xl outline-none font-medium ${springAnim}`}
+                                                    />
+                                                </div>
                                                 <div className="group">
                                                     <label className="block text-xs font-semibold text-zinc-500 dark:text-zinc-400 mb-2">初始买入总额 (元)</label>
                                                     <div className="relative">
@@ -518,7 +570,7 @@
                                                     </div>
                                                 </div>
                                                 <div className="group">
-                                                    <label className="block text-xs font-semibold text-zinc-500 dark:text-zinc-400 mb-2">期末卖出残值 (元)</label>
+                                                    <label className="block text-xs font-semibold text-zinc-500 dark:text-zinc-400 mb-2">预估3年卖出残值 (元)</label>
                                                     <div className="relative">
                                                         <span className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-400 font-medium text-sm">¥</span>
                                                         <input
